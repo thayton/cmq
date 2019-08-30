@@ -1,4 +1,4 @@
-import re
+import os
 import csv
 import json
 import time
@@ -52,7 +52,9 @@ class CmqOrgScraper(object):
     def goto_next_page(self, soup):
         pass
 
-    def search_physician_name(self, name):
+    def search_physician_names(self, names):
+        links = []
+
         resp = self.session.get(self.url)
         soup = BeautifulSoup(resp.text, 'html.parser')
 
@@ -73,15 +75,30 @@ class CmqOrgScraper(object):
         del data['cbxExMembres']
         del data['DDListSpecialite']
 
-        data['txbNom'] = 'Aaron'
+        for name in names:
+            data['txbNom'] = name
 
-        resp = self.session.post('http://www.cmq.org/bottin/list.aspx', params={'lang': 'en'}, data=data)
-        soup = BeautifulSoup(resp.text, 'html.parser')
+            resp = self.session.post('http://www.cmq.org/bottin/list.aspx', params={'lang': 'en'}, data=data)
+            soup = BeautifulSoup(resp.text, 'html.parser')
 
-        print(soup.prettify())
+            table = soup.select_one('table#GViewList')
 
-    def get_auto_complete_names(self):
+            for a in table.select('tr > td > a'):
+                url = urljoin(self.url, a['href'])
+                if url not in links:
+                    links.append(url)
+
+        return links
+
+    def get_auto_complete_names(self, load_from_file=True):
         names = []
+
+        if os.path.exists('names.txt'):
+            with open('names.txt', 'r') as fd:
+                names = fd.read().splitlines()
+
+            if len(names) > 0:
+                return names
 
         headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/76.0.3809.100 Safari/537.36',
@@ -102,10 +119,15 @@ class CmqOrgScraper(object):
             time.sleep(0.5)
 
         self.logger.info(f'Returning {len(names)} physician names to search')
+
+        with open('names.txt', 'w') as fd:
+            fd.write('\n'.join(names))
+
         return names
 
     def scrape(self):
         names = self.get_auto_complete_names()
+        links = self.search_physician_names(names)
 
 if __name__ == '__main__':
     scraper = CmqOrgScraper()
