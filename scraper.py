@@ -3,10 +3,14 @@ import csv
 import json
 import time
 import string
+import random
 import logging
 import argparse
 import requests
 
+from redis import StrictRedis
+from redis.exceptions import RedisError
+from rediscache import RedisCache
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
@@ -21,35 +25,98 @@ class CmqOrgScraper(object):
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
 
+        self.init_cache()
+
+    def delay(self):
+        '''
+        Put a random delay between 1-3 sec to avoid getting blocked by 
+        the server and getting the 'exceeded the maximum number of queries
+        per minute' warning
+        '''
+        time.sleep(random.randint(1,3))
+        
     def csv_save(self, data):
         headers = [
-            'Case Number',
-            'Case Type',
-            'Applicant',
-            'Filing Date',
-            'URL'
+            'Name',
+            'Gender',
+            'Permit Number',
+            'Permit',
+            'Status',
+            'Insurance',
+            'Specialty',
+            'Activity',
+            'Authorization',
+            'Address',
+            'Phone',
+            'URL'            
         ]
 
-        with open('records.csv', 'w') as fp:
+        with open('phsyicians.csv', 'w') as fp:
             writer = csv.writer(fp, quoting=csv.QUOTE_NONNUMERIC)
             writer.writerow(headers)
 
             for d in data:
                 row = [
-                    d.get('case-number', ''),
-                    d.get('case-type', ''),
-                    d.get('applicant', ''),
-                    d.get('filing-date', ''),
-                    d.get('url', ''),
+                    d.get('name', ''),
+                    d.get('gender', ''),
+                    d.get('permit number', ''),
+                    d.get('permit', ''),
+                    d.get('status', ''),
+                    d.get('insurance', ''),
+                    d.get('specialty', ''),
+                    d.get('activity', ''),
+                    d.get('authorization', ''),
+                    d.get('address', ''),
+                    d.get('phone', ''),
+                    d.get('url', '')
                 ]
 
                 writer.writerow(row)
-    
-    def submit_search(self):
-        pass
 
-    def goto_next_page(self, soup):
-        pass
+    def init_cache(self):
+        '''
+        Attempt to connect to Redis (via ping) or set cache to None if that fails
+        '''
+        redis_config = {
+            'host': 'localhost',
+            'port': 6379,
+            'db': 0,
+            'password': 'foobared' 
+        }
+
+        client = StrictRedis(**redis_config)
+        try:
+            client.ping()
+        except RedisError as ex:
+            self.logger.warning(f'Failed to connect to Redis - {ex}')
+            self.cache = None
+        else:
+            self.cache = RedisCache(client=client)
+
+    def cached_http_get(self, url, **kwargs):
+        '''
+        Retrieve URL page from cache if cache is configured
+        '''
+        html = None
+
+        if self.cache:
+            try:
+                html = self.cache[url]
+            except KeyError:
+                pass
+            else:
+                self.logger.debug(f'Retrieved {url} from cache')
+
+        if html is None:
+            self.delay()
+            
+            resp = self.session.get(url, **kwargs)
+            html = resp.text
+
+            if self.cache != None and resp.status_code == 200:
+                self.cache[url] = html
+
+        return html
 
     def get_search_form_data(self):
         resp = self.session.get(self.url)
@@ -104,7 +171,7 @@ class CmqOrgScraper(object):
                 if url not in links:
                     links.append(url)
 
-                time.sleep(1)
+                self.delay()
 
         self.logger.info(f'Returning {len(links)} links')
 
@@ -140,7 +207,7 @@ class CmqOrgScraper(object):
             for name in data['d']:
                 names.append(name)
 
-            time.sleep(0.5)
+            self.delay()
 
         self.logger.info(f'Returning {len(names)} physician names to search')
 
@@ -149,9 +216,43 @@ class CmqOrgScraper(object):
 
         return names
 
+    def get_physician_info(self, url):
+        data = {}
+
+        html = self.cached_http_get(url)
+        soup = BeautifulSoup(html, 'html.parser')
+
+        table = soup.select_one('table.griddetails')
+        
+        th = table.find('th')
+        td = th.find_all('td')
+
+        data['name'] = td[0].text.strip()
+
+        for tr in table.find_all('tr')[3:]:
+            td = tr.find_all('td')
+
+            if len(td) != 2:
+                continue
+
+            k = td[0].text.strip().lower()
+            v = td[1].text.strip()
+
+            data[k] = v
+
+        return data
+    
     def scrape(self):
+        physicans = []
+        
         names = self.get_auto_complete_names()
         links = self.search_physician_names(names)
+
+        for url in links:
+            data = self.get_physician_info(url)
+            physicians.append(data)
+
+        self.csv_save(physicians)
 
 if __name__ == '__main__':
     scraper = CmqOrgScraper()
