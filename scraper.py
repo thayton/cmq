@@ -202,7 +202,8 @@ class CmqOrgScraper(object):
                 resp = self.session.post(auto_complete_url, json={ 'nom': prefix })                    
                 data = resp.json()
 
-                self.delay()
+                ival = [ 0.25, 0.5, 0.75 ]
+                time.sleep(ival[random.randint(0,2)])
 
                 if self.cache:
                     self.cache[f'{auto_complete_url}/{prefix}'] = json.dumps(data)
@@ -210,7 +211,7 @@ class CmqOrgScraper(object):
             return data
 
         def get_auto_complete_names_r(prefix):
-            for c in string.ascii_lowercase:
+            for c in string.ascii_lowercase + '-':
                 search_str = prefix + c
 
                 self.logger.debug(f'Getting auto-complete names for names starting with {search_str}')
