@@ -109,7 +109,9 @@ class CmqOrgScraper(object):
 
         if html is None:
             self.delay()
-            
+
+            self.logger.debug(f'Getting {url}')
+
             resp = self.session.get(url, **kwargs)
             html = resp.text
 
@@ -180,7 +182,51 @@ class CmqOrgScraper(object):
 
         return links
 
-    def get_auto_complete_names(self, load_from_file=True):
+    def get_auto_complete_names(self):
+        names = []
+
+        def post_ajax_name_auto_complete(prefix):
+            auto_complete_url = 'http://www.cmq.org/bottin/index.aspx/GetAutocomplete'
+            data = None
+
+            if self.cache:
+                try:
+                    text = self.cache[f'{auto_complete_url}/{prefix}']
+                    data = json.loads(text)
+                except KeyError:
+                    pass
+                else:
+                    self.logger.debug(f'Retrieved auto complete \'{prefix}\' from cache')
+
+            if data is None:
+                resp = self.session.post(auto_complete_url, json={ 'nom': prefix })                    
+                data = resp.json()
+
+                self.delay()
+
+                if self.cache:
+                    self.cache[f'{auto_complete_url}/{prefix}'] = json.dumps(data)
+
+            return data
+
+        def get_auto_complete_names_r(prefix):
+            for c in string.ascii_lowercase:
+                search_str = prefix + c
+
+                self.logger.debug(f'Getting auto-complete names for names starting with {search_str}')
+                data = post_ajax_name_auto_complete(search_str)
+
+                for name in data['d']:
+                    if name not in names:
+                        names.append(name)
+
+                if len(data['d']) >= 10:
+                    get_auto_complete_names_r(search_str)
+
+        get_auto_complete_names_r('')
+        return names
+
+    def get_auto_complete_names_orig(self, load_from_file=True):
         names = []
 
         if os.path.exists('names.txt'):
@@ -217,7 +263,9 @@ class CmqOrgScraper(object):
         return names
 
     def get_physician_info(self, url):
-        data = {}
+        data = {
+            'url': url
+        }
 
         html = self.cached_http_get(url)
         soup = BeautifulSoup(html, 'html.parser')
@@ -241,9 +289,9 @@ class CmqOrgScraper(object):
             data[k] = v
 
         return data
-    
+
     def scrape(self):
-        physicans = []
+        physicians = []
         
         names = self.get_auto_complete_names()
         links = self.search_physician_names(names)
