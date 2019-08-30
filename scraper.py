@@ -13,7 +13,6 @@ from urllib.parse import urljoin
 class CmqOrgScraper(object):
     def __init__(self):
         self.url = 'http://www.cmq.org/bottin/index.aspx?lang=en&a=1'
-        self.auto_complete_url = 'http://www.cmq.org/bottin/index.aspx/GetAutocomplete'
         self.session = requests.Session()
 
         FORMAT = "[ %(filename)s:%(lineno)s - %(funcName)s() ] %(message)s"
@@ -52,9 +51,7 @@ class CmqOrgScraper(object):
     def goto_next_page(self, soup):
         pass
 
-    def search_physician_names(self, names):
-        links = []
-
+    def get_search_form_data(self):
         resp = self.session.get(self.url)
         soup = BeautifulSoup(resp.text, 'html.parser')
 
@@ -75,18 +72,44 @@ class CmqOrgScraper(object):
         del data['cbxExMembres']
         del data['DDListSpecialite']
 
+        return data
+
+    def search_physician_names(self, names, load_from_file=True):
+        links = []
+
+        if os.path.exists('links.txt'):
+            with open('links.txt', 'r') as fd:
+                links = fd.read().splitlines()
+
+            if len(links) > 0:
+                return links
+
+        data = self.get_search_form_data()
+
         for name in names:
             data['txbNom'] = name
+
+            self.logger.info(f'Searching names with pattern {name}')
 
             resp = self.session.post('http://www.cmq.org/bottin/list.aspx', params={'lang': 'en'}, data=data)
             soup = BeautifulSoup(resp.text, 'html.parser')
 
             table = soup.select_one('table#GViewList')
+            if table is None:
+                self.logger.info(f'No search results for name pattern {name}')
+                continue
 
             for a in table.select('tr > td > a'):
                 url = urljoin(self.url, a['href'])
                 if url not in links:
                     links.append(url)
+
+                time.sleep(1)
+
+        self.logger.info(f'Returning {len(links)} links')
+
+        with open('links.txt', 'w') as fd:
+            fd.write('\n'.join(links))
 
         return links
 
@@ -108,7 +131,8 @@ class CmqOrgScraper(object):
         for c in string.ascii_lowercase:
             self.logger.debug(f'Getting auto-complete names for names starting with {c}')
 
-            resp = self.session.post(self.auto_complete_url, headers=headers, json={
+            auto_complete_url = 'http://www.cmq.org/bottin/index.aspx/GetAutocomplete'
+            resp = self.session.post(auto_complete_url, headers=headers, json={
                 'nom': c
             })
             data = resp.json()
