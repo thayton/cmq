@@ -173,7 +173,7 @@ class CmqOrgScraper(object):
                 if url not in links:
                     links.append(url)
 
-                self.delay()
+            self.delay()
 
         self.logger.info(f'Returning {len(links)} links')
 
