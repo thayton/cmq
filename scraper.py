@@ -48,7 +48,6 @@ class CmqOrgScraper(object):
             'Authorization',
             'Address',
             'Phone',
-            'URL'            
         ]
 
         with open('phsyicians.csv', 'w') as fp:
@@ -68,7 +67,6 @@ class CmqOrgScraper(object):
                     d.get('authorization', ''),
                     d.get('address', ''),
                     d.get('phone', ''),
-                    d.get('url', '')
                 ]
 
                 writer.writerow(row)
@@ -143,19 +141,14 @@ class CmqOrgScraper(object):
 
         return data
 
-    def search_physician_names(self, names, load_from_file=True):
-        links = []
-
-        if os.path.exists('links.txt'):
-            with open('links.txt', 'r') as fd:
-                links = fd.read().splitlines()
-
-            if len(links) > 0:
-                return links
-
-        data = self.get_search_form_data()
+    def search_physician_names(self, names):
+        physicians = []
+        all_links = []
 
         for name in names:
+            data = self.get_search_form_data()            
+            links = []
+            
             data['txbNom'] = name
 
             self.logger.info(f'Searching names with pattern {name}')
@@ -170,17 +163,31 @@ class CmqOrgScraper(object):
 
             for a in table.select('tr > td > a'):
                 url = urljoin(self.url, a['href'])
-                if url not in links:
-                    links.append(url)
 
+                if url not in all_links:
+                    all_links.append(url)
+                    links.append({ 'url': url, 'name': a.text.strip() })
+
+            for link in links:
+                data = None
+                cached_details_url = f"http://www.cmq.org/bottin/details.aspx/{link['name']}"
+                try:
+                    text = self.cache[cached_details_url]
+                    data = json.loads(text)
+                except KeyError:
+                    pass
+                else:
+                    self.logger.debug(f"Retrieved physician data for {link['name']} from cache")
+
+                if data is None:
+                    data = self.get_physician_info(url)
+                    self.cache[cached_details_url] = json.dumps(data)
+                    
+                physicians.append(data)
+                
             self.delay()
 
-        self.logger.info(f'Returning {len(links)} links')
-
-        with open('links.txt', 'w') as fd:
-            fd.write('\n'.join(links))
-
-        return links
+        return physicians
 
     def get_auto_complete_names(self):
         names = []
@@ -264,9 +271,7 @@ class CmqOrgScraper(object):
         return names
 
     def get_physician_info(self, url):
-        data = {
-            'url': url
-        }
+        data = {}
 
         html = self.cached_http_get(url)
         soup = BeautifulSoup(html, 'html.parser')
@@ -292,14 +297,8 @@ class CmqOrgScraper(object):
         return data
 
     def scrape(self):
-        physicians = []
-        
         names = self.get_auto_complete_names()
-        links = self.search_physician_names(names)
-
-        for url in links:
-            data = self.get_physician_info(url)
-            physicians.append(data)
+        physicians = self.search_physician_names(names)
 
         self.csv_save(physicians)
 
