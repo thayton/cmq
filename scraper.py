@@ -50,7 +50,7 @@ class CmqOrgScraper(object):
             'Phone',
         ]
 
-        with open('phsyicians.csv', 'w') as fp:
+        with open('physicians.csv', 'w') as fp:
             writer = csv.writer(fp, quoting=csv.QUOTE_NONNUMERIC)
             writer.writerow(headers)
 
@@ -116,6 +116,7 @@ class CmqOrgScraper(object):
 
     def search_physician_names(self, names):
         physicians = []
+        done = []
 
         for name in names:
             data = self.get_search_form_data()            
@@ -138,6 +139,11 @@ class CmqOrgScraper(object):
                 links.append({ 'url': url, 'name': a.text.strip() })
 
             for link in links:
+                self.logger.info(f"Getting info for {link['name']}")
+
+                if link['name'] in done:
+                    continue
+
                 data = None
                 cached_details_url = f"http://www.cmq.org/bottin/details.aspx/{link['name']}"
                 try:
@@ -152,8 +158,11 @@ class CmqOrgScraper(object):
                     data = self.get_physician_info(link['url'])
                     if data != None:
                         self.cache[cached_details_url] = json.dumps(data)
-                        physicians.append(data)
-                
+
+                if data:
+                    physicians.append(data)
+                    done.append(link['name'])
+
             self.delay()
 
         return physicians
@@ -203,6 +212,8 @@ class CmqOrgScraper(object):
 
     def get_physician_info(self, url):
         data = {}
+
+        self.logger.info(f'Getting physician url {url}')
 
         resp = self.session.get(url)
         soup = BeautifulSoup(resp.text, 'html.parser')
