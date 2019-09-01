@@ -91,33 +91,6 @@ class CmqOrgScraper(object):
         else:
             self.cache = RedisCache(client=client)
 
-    def cached_http_get(self, url, **kwargs):
-        '''
-        Retrieve URL page from cache if cache is configured
-        '''
-        html = None
-
-        if self.cache:
-            try:
-                html = self.cache[url]
-            except KeyError:
-                pass
-            else:
-                self.logger.debug(f'Retrieved {url} from cache')
-
-        if html is None:
-            self.delay()
-
-            self.logger.debug(f'Getting {url}')
-
-            resp = self.session.get(url, **kwargs)
-            html = resp.text
-
-            if self.cache != None and resp.status_code == 200:
-                self.cache[url] = html
-
-        return html
-
     def get_search_form_data(self):
         resp = self.session.get(self.url)
         soup = BeautifulSoup(resp.text, 'html.parser')
@@ -143,7 +116,6 @@ class CmqOrgScraper(object):
 
     def search_physician_names(self, names):
         physicians = []
-        all_links = []
 
         for name in names:
             data = self.get_search_form_data()            
@@ -163,10 +135,7 @@ class CmqOrgScraper(object):
 
             for a in table.select('tr > td > a'):
                 url = urljoin(self.url, a['href'])
-
-                if url not in all_links:
-                    all_links.append(url)
-                    links.append({ 'url': url, 'name': a.text.strip() })
+                links.append({ 'url': url, 'name': a.text.strip() })
 
             for link in links:
                 data = None
@@ -180,10 +149,10 @@ class CmqOrgScraper(object):
                     self.logger.debug(f"Retrieved physician data for {link['name']} from cache")
 
                 if data is None:
-                    data = self.get_physician_info(url)
-                    self.cache[cached_details_url] = json.dumps(data)
-                    
-                physicians.append(data)
+                    data = self.get_physician_info(link['url'])
+                    if data != None:
+                        self.cache[cached_details_url] = json.dumps(data)
+                        physicians.append(data)
                 
             self.delay()
 
@@ -196,14 +165,13 @@ class CmqOrgScraper(object):
             auto_complete_url = 'http://www.cmq.org/bottin/index.aspx/GetAutocomplete'
             data = None
 
-            if self.cache:
-                try:
-                    text = self.cache[f'{auto_complete_url}/{prefix}']
-                    data = json.loads(text)
-                except KeyError:
-                    pass
-                else:
-                    self.logger.debug(f'Retrieved auto complete \'{prefix}\' from cache')
+            try:
+                text = self.cache[f'{auto_complete_url}/{prefix}']
+                data = json.loads(text)
+            except KeyError:
+                pass
+            else:
+                self.logger.debug(f'Retrieved auto complete \'{prefix}\' from cache')
 
             if data is None:
                 resp = self.session.post(auto_complete_url, json={ 'nom': prefix })                    
@@ -212,8 +180,7 @@ class CmqOrgScraper(object):
                 ival = [ 0.25, 0.5, 0.75 ]
                 time.sleep(ival[random.randint(0,2)])
 
-                if self.cache:
-                    self.cache[f'{auto_complete_url}/{prefix}'] = json.dumps(data)
+                self.cache[f'{auto_complete_url}/{prefix}'] = json.dumps(data)
 
             return data
 
@@ -234,50 +201,18 @@ class CmqOrgScraper(object):
         get_auto_complete_names_r('')
         return names
 
-    def get_auto_complete_names_orig(self, load_from_file=True):
-        names = []
-
-        if os.path.exists('names.txt'):
-            with open('names.txt', 'r') as fd:
-                names = fd.read().splitlines()
-
-            if len(names) > 0:
-                return names
-
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/76.0.3809.100 Safari/537.36',
-            'X-Requested-With': 'XMLHttpRequest'
-        }
-
-        for c in string.ascii_lowercase:
-            self.logger.debug(f'Getting auto-complete names for names starting with {c}')
-
-            auto_complete_url = 'http://www.cmq.org/bottin/index.aspx/GetAutocomplete'
-            resp = self.session.post(auto_complete_url, headers=headers, json={
-                'nom': c
-            })
-            data = resp.json()
-
-            for name in data['d']:
-                names.append(name)
-
-            self.delay()
-
-        self.logger.info(f'Returning {len(names)} physician names to search')
-
-        with open('names.txt', 'w') as fd:
-            fd.write('\n'.join(names))
-
-        return names
-
     def get_physician_info(self, url):
         data = {}
 
-        html = self.cached_http_get(url)
-        soup = BeautifulSoup(html, 'html.parser')
+        resp = self.session.get(url)
+        soup = BeautifulSoup(resp.text, 'html.parser')
 
         table = soup.select_one('table.griddetails')
-        
+
+        if table is None:
+            self.logger.warning(f'No physician info table at {url}')
+            return None
+
         th = table.find('th')
         td = th.find_all('td')
 
